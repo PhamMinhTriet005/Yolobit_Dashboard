@@ -1,64 +1,237 @@
 ﻿import { useState, useEffect } from 'react';
-import mqtt from 'mqtt';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from 'recharts';
 import './App.css';
 
-const MQTT_BROKER = 'wss://mqtt.ohstem.vn:8084/mqtt';
-const USERNAME = 'Final_Boss';
-const PASSWORD = '';
+const BACKEND_URL = 'http://localhost:3000';
+const DEFAULT_PORT = 'COM6';
+const LAST_PORT_KEY = 'yolobit:lastPort';
 
 function App() {
-  const [client, setClient] = useState(null);
+  const [connected, setConnected] = useState(false);
+  const [lastSensorUpdate, setLastSensorUpdate] = useState(0);
   const [sensors, setSensors] = useState({ V1: 0, V2: 0, V3: 0, V4: 0, V5: 0, V6: 0 });
-  const [controls, setControls] = useState({ V7: '0', V10: '0', V11: '0' });
+  const [controls, setControls] = useState({ V7: 0, V10: 0, V11: 0 });
+  const [manualPump1, setManualPump1] = useState(null); 
+  const [manualPump2, setManualPump2] = useState(null); 
   const [lightHistory, setLightHistory] = useState([]);
   const [smHistory, setSmHistory] = useState([]);
+  const [availablePorts, setAvailablePorts] = useState([]);
+  const [selectedPort, setSelectedPort] = useState(() => localStorage.getItem(LAST_PORT_KEY) || DEFAULT_PORT);
+  const [showConnectModal, setShowConnectModal] = useState(true);
+  const [isLoadingPorts, setIsLoadingPorts] = useState(false);
 
+  // Fetch sensor data periodically
   useEffect(() => {
-    const mqttClient = mqtt.connect(MQTT_BROKER, {
-      username: USERNAME,
-      password: PASSWORD,
-      clientId: `web_dashboard_${Math.random().toString(16).slice(3)}`,
-    });
-
-    mqttClient.on('connect', () => {
-      ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V10', 'V11'].forEach(feed => {
-        mqttClient.subscribe(`${USERNAME}/feeds/${feed}`);
-      });
-    });
-
-    mqttClient.on('message', (topic, message) => {
-      const payload = message.toString();
-      const feed = topic.split('/').pop();
-
-      if (['V1', 'V2', 'V3', 'V4', 'V5', 'V6'].includes(feed)) {
-        const val = parseFloat(payload);
-        setSensors(prev => ({ ...prev, [feed]: isNaN(val) ? 0 : val }));
-        
-        if (feed === 'V4') setLightHistory(prev => [...prev, { time: new Date().toLocaleTimeString(), value: val }].slice(-20));
-        if (feed === 'V3') setSmHistory(prev => [...prev, { time: new Date().toLocaleTimeString(), value: val }].slice(-20));
-      } else if (['V7', 'V10', 'V11'].includes(feed)) {
-        setControls(prev => ({ ...prev, [feed]: payload }));
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/sensors`);
+        if (response.ok) {
+          const data = await response.json();
+          const now = Date.now();
+          setLastSensorUpdate(now);
+          setConnected(true);
+          setShowConnectModal(false);
+          setSensors(prev => ({...data.data, V6: 0}));
+          
+          const deviceV10 = Number(data.data?.V10);
+          const deviceV11 = Number(data.data?.V11);
+          setControls(prev => {
+            setManualPump1(current => (current !== null && Number(current) === deviceV10) ? null : current);
+            setManualPump2(current => (current !== null && Number(current) === deviceV11) ? null : current);
+            
+            return {
+              ...prev,
+              V7: Number(data.data?.V7 ?? prev.V7),
+              V10: deviceV10 ?? prev.V10,
+              V11: deviceV11 ?? prev.V11,
+            };
+          });
+          
+          // Add to history
+          setLightHistory(prev => [...prev, { time: new Date().toLocaleTimeString(), value: data.data.V4 }].slice(-20));
+          setSmHistory(prev => [...prev, { time: new Date().toLocaleTimeString(), value: data.data.V3 }].slice(-20));
+        }
+      } catch (error) {
+        console.error('Fetch error:', error);
       }
-    });
+    }, 2000);
 
-    setClient(mqttClient);
-    return () => mqttClient.end();
+    return () => clearInterval(interval);
   }, []);
 
-  const publishControl = (feed, value) => {
-    if (client) {
-      client.publish(`${USERNAME}/feeds/${feed}`, value.toString());
-      setControls(prev => ({ ...prev, [feed]: value.toString() }));
+  // Automatic Pump 1 Control Logic
+  useEffect(() => {
+    // Only auto-control in Mode 1 or Mode 2
+    if (controls.V7 === 1 || controls.V7 === 2) {
+      const sm = Number(sensors.V3 || 0);
+      const pumpState = Number(controls.V10 || 0);
+
+      if (sm < 50 && pumpState === 0) {
+        console.log('[AUTO] SM < 50%, turning PUMP 1 ON');
+        sendCommand('V10', 1);
+      } else if (sm > 80 && pumpState === 1) {
+        console.log('[AUTO] SM > 80%, turning PUMP 1 OFF');
+        sendCommand('V10', 0);
+      }
+    }
+  }, [sensors.V3, controls.V7, controls.V10]);
+
+  useEffect(() => {
+    fetchAvailablePorts();
+  }, []);
+
+  // Check backend health
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/health`);
+        if (response.ok) {
+          const data = await response.json();
+          const now = Date.now();
+          const hasRecentTelemetry = now - lastSensorUpdate < 8000;
+          const isOnline = data.connected || hasRecentTelemetry;
+
+          setConnected(isOnline);
+          if (!isOnline) {
+            setShowConnectModal(true);
+            fetchAvailablePorts();
+          } else {
+            setShowConnectModal(false);
+          }
+        }
+      } catch (error) {
+        setConnected(false);
+        setShowConnectModal(true);
+        fetchAvailablePorts();
+      }
+    };
+
+    checkHealth();
+    const interval = setInterval(checkHealth, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const sendCommand = async (feed, value) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feed, value }),
+      });
+      if (response.ok) {
+        setControls(prev => ({ ...prev, [feed]: value }));
+        if (feed === 'V10') setManualPump1(Number(value));
+        if (feed === 'V11') setManualPump2(Number(value));
+      }
+    } catch (error) {
+      console.error('Command error:', error);
+    }
+  };
+
+  const fetchAvailablePorts = async () => {
+    setIsLoadingPorts(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/ports`);
+      if (response.ok) {
+        const data = await response.json();
+        const ports = data.ports || [];
+        setAvailablePorts(ports);
+
+        const savedPort = localStorage.getItem(LAST_PORT_KEY);
+        const savedPortStillAvailable = savedPort && ports.some((port) => port.port === savedPort);
+        const defaultPortStillAvailable = ports.some((port) => port.port === DEFAULT_PORT);
+
+        if (savedPortStillAvailable) {
+          setSelectedPort(savedPort);
+        } else if (defaultPortStillAvailable) {
+          setSelectedPort(DEFAULT_PORT);
+        } else if (ports.length > 0) {
+          setSelectedPort(ports[0].port);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching ports:', error);
+    } finally {
+      setIsLoadingPorts(false);
+    }
+  };
+
+  const connectToPort = async () => {
+    if (!selectedPort) {
+      alert('Please select a port');
+      return;
+    }
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: selectedPort }),
+      });
+      if (response.ok) {
+        localStorage.setItem(LAST_PORT_KEY, selectedPort);
+        setConnected(true);
+        setShowConnectModal(false);
+      } else {
+        alert('Failed to connect to port');
+      }
+    } catch (error) {
+      alert('Error: ' + error.message);
     }
   };
 
   const boundedSM = Math.min(Math.max(sensors.V3 || 0, 0), 100);
   const gaugeRotation = (boundedSM / 100) * 180 - 90;
+  
+  const pump1State = (manualPump1 !== null) ? Number(manualPump1) : Number(controls.V10);
+  const pump2State = (manualPump2 !== null) ? Number(manualPump2) : Number(controls.V11);
+  const pump1SwitchChecked = pump1State === 1;
+  const pump2SwitchChecked = pump2State === 1;
+
+  const getModeColor = () => {
+    const mode = Number(controls.V7);
+    if (mode === 0) return '#38ef7d'; // green
+    if (mode === 1) return '#f2c94c'; // yellow
+    if (mode === 2) return '#ff4b2b'; // red
+    return '#666';
+  };
 
   return (
     <div className="dashboard-container">
+      {showConnectModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h2>Connect to Yolobit</h2>
+            <p>{connected ? 'Backend is live. Choose the board port to attach.' : 'Select a COM port to connect:'}</p>
+            <div className="modal-help">
+              COM6 is the verified board port in this workspace.
+            </div>
+            <select 
+              value={selectedPort} 
+              onChange={(e) => setSelectedPort(e.target.value)}
+              className="port-select"
+              disabled={isLoadingPorts}
+            >
+              <option value="">{isLoadingPorts ? '-- Loading ports --' : '-- Select Port --'}</option>
+              {availablePorts.map((port) => (
+                <option key={port.port} value={port.port}>
+                  {port.port} ({port.type}) - {port.description}
+                </option>
+              ))}
+            </select>
+            <button onClick={connectToPort} className="connect-btn" disabled={!selectedPort || isLoadingPorts}>Connect</button>
+            <button onClick={fetchAvailablePorts} className="refresh-btn">Refresh Ports</button>
+          </div>
+        </div>
+      )}
+      
       <div className="dashboard">
+        <div className="connection-status">
+          <span className={`status-pill ${connected ? 'status-on' : 'status-off'}`}>
+            {connected ? 'Device connected' : 'Device disconnected'}
+          </span>
+          <span className="status-text">Backend: {connected ? 'online' : 'online, waiting for device'}</span>
+          <span className="status-text">Port: {selectedPort || 'none selected'}</span>
+        </div>
         
         <div className="top-row">
           <div className="metric-box bg-red">
@@ -143,8 +316,8 @@ function App() {
               <label className="toggle-switch">
                 <input 
                   type="checkbox" 
-                  checked={controls.V10 === '1'} 
-                  onChange={(e) => publishControl('V10', e.target.checked ? '1' : '0')} 
+                  checked={pump1SwitchChecked} 
+                  onChange={(e) => sendCommand('V10', e.target.checked ? 1 : 0)} 
                 />
                 <span className="slider round"></span>
               </label>
@@ -155,8 +328,8 @@ function App() {
               <label className="toggle-switch">
                 <input 
                   type="checkbox" 
-                  checked={controls.V11 === '1'} 
-                  onChange={(e) => publishControl('V11', e.target.checked ? '1' : '0')} 
+                  checked={pump2SwitchChecked} 
+                  onChange={(e) => sendCommand('V11', e.target.checked ? 1 : 0)} 
                 />
                 <span className="slider round"></span>
               </label>
@@ -170,13 +343,14 @@ function App() {
                   <span>MODE</span>
                   <span>{controls.V7}</span>
               </div>
-              <div className="slider-track-container">
+              <div className="slider-track-container" style={{ backgroundColor: getModeColor(), border: 'none', transition: 'background-color 0.3s' }}>
                 <input 
                     type="range" 
                     min="0" max="2" 
                     value={Number(controls.V7)} 
-                    onChange={(e) => publishControl('V7', e.target.value)} 
+                    onChange={(e) => sendCommand('V7', parseInt(e.target.value))} 
                     className="range-slider"
+                    style={{ background: getModeColor() }}
                 />
               </div>
           </div>

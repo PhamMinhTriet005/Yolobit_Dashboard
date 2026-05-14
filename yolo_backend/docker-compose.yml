@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  backend:
+    build: .
+    environment:
+      - MQTT_PREFIX=Final_Boss/feeds
+      - PORT=3000
+    ports:
+      - "3000:3000"
+      - "1883:1883"
