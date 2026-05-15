@@ -165,7 +165,7 @@ Commands are sent in format: `!PREFIX:VALUE#`
 |------|--------|-------------|-------------|
 | V7 | MODE | 0-2 | Operating mode (0=Manual, 1=Auto, 2=Auto) |
 | V10 | PUMP | 0/1 | Pump 1 (0=off, 1=on) |
-| V11 | PUMP | 0/1 | Pump 2 (0=off, 1=on) |
+| V11 | PUMP2 | 0/1 | Pump 2 (0=off, 1=on) |
 
 **Example:**
 ```

@@ -269,7 +269,7 @@ def send_command():
         prefix_map = {
             'V7': 'MODE',      # Mode (0-2)
             'V10': 'PUMP',     # Pump 1
-            'V11': 'LIGHT',    # Light control
+            'V11': 'PUMP2',    # Pump 2
         }
         
         prefix = prefix_map.get(feed, feed)

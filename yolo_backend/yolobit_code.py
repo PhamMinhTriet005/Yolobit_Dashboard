@@ -75,7 +75,7 @@ def on_event_timer_callback_Q_W_a_A_F():
 event_manager.add_timer_event(2000, on_event_timer_callback_Q_W_a_A_F)
 
 def on_event_timer_callback_j_w_Y_C_N():
-  global Chu_E1_BB_97i_AI, th_C3_B4ng_tin, GDD, RT, MODE, LUX, L_E1_BB_87nh_AI, Th_E1_BB_9Di_Gian, RH, SM, PUMP1_STATE, LIGHT_STATE
+  global Chu_E1_BB_97i_AI, th_C3_B4ng_tin, GDD, RT, MODE, LUX, L_E1_BB_87nh_AI, Th_E1_BB_9Di_Gian, RH, SM, PUMP1_STATE, PUMP2_STATE
   if MODE == 1 or MODE == 2:
     if SM < 50:
       pin10.write_digital((1))
@@ -174,7 +174,7 @@ def on_event_timer_callback_T_U_a_j_H():
 event_manager.add_timer_event(30000, on_event_timer_callback_T_U_a_j_H)
 
 def on_event_timer_callback_o_S_Y_c_N():
-  global RT, RH, SM, LUX, GDD, MODE, PUMP1_STATE, LIGHT_STATE
+  global RT, RH, SM, LUX, GDD, MODE, PUMP1_STATE, PUMP2_STATE
   dht20.read_dht20()
   RT = dht20.dht20_temperature()
   RH = dht20.dht20_humidity()
@@ -194,7 +194,7 @@ def on_event_timer_callback_o_S_Y_c_N():
 event_manager.add_timer_event(2000, on_event_timer_callback_o_S_Y_c_N)
 
 def process_command(cmd_str):
-  global MODE, PUMP1_STATE, PUMP2_STATE, LIGHT_STATE
+  global MODE, PUMP1_STATE, PUMP2_STATE
   try:
     cmd_str = cmd_str.strip()
     if cmd_str.startswith('!') and cmd_str.endswith('#'):
